@@ -13,25 +13,36 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Serve static files from frontend
-app.use(express.static(path.join(__dirname, '..', 'frontend')));
+// Serve static files from frontend (not needed on Vercel - Vercel handles it)
+if (!isVercel) {
+    app.use(express.static(path.join(__dirname, '..', 'frontend')));
+}
 
-// Multer config for file uploads
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const uploadDir = path.join(__dirname, 'uploads');
-        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
-        cb(null, uniqueName);
-    }
-});
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
+// Multer config for file uploads (use memory storage on Vercel)
+const isVercel = !!process.env.VERCEL;
+let upload;
+if (isVercel) {
+    const memoryStorage = multer.memoryStorage();
+    upload = multer({ storage: memoryStorage, limits: { fileSize: 20 * 1024 * 1024 } });
+} else {
+    const diskStorage = multer.diskStorage({
+        destination: (req, file, cb) => {
+            const uploadDir = path.join(__dirname, 'uploads');
+            if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+            cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+            const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname);
+            cb(null, uniqueName);
+        }
+    });
+    upload = multer({ storage: diskStorage, limits: { fileSize: 20 * 1024 * 1024 } });
+}
 
 // ====== DATA STORE (JSON-based for simplicity) ======
-const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_FILE = isVercel
+    ? path.join('/tmp', 'data.json')
+    : path.join(__dirname, 'data.json');
 
 function loadData() {
     if (!fs.existsSync(DATA_FILE)) {
@@ -265,8 +276,12 @@ app.post('/api/ai/extract-url', async (req, res) => {
     }
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`Note Summarizer server running on http://localhost:${PORT}`);
-    console.log(`Open your browser at http://localhost:${PORT}`);
-});
+// Start server (only when run directly, not when imported as module for Vercel)
+if (require.main === module || process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`Note Summarizer server running on http://localhost:${PORT}`);
+        console.log(`Open your browser at http://localhost:${PORT}`);
+    });
+}
+
+module.exports = app;

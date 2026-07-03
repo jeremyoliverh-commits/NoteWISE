@@ -1,0 +1,19 @@
+{
+  "name": "notewise",
+  "version": "1.0.0",
+  "description": "NoteWISE AI - Smart Note Summarizer",
+  "private": true,
+  "scripts": {
+    "dev": "node backend/server.js",
+    "start": "node backend/server.js",
+    "vercel-build": "npm install"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "openai": "^4.20.0",
+    "uuid": "^9.0.0"
+  }
+}
