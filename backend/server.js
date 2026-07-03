@@ -7,6 +7,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const isVercel = !!process.env.VERCEL;
 
 // Middleware
 app.use(cors());
@@ -19,7 +20,6 @@ if (!isVercel) {
 }
 
 // Multer config for file uploads (use memory storage on Vercel)
-const isVercel = !!process.env.VERCEL;
 let upload;
 if (isVercel) {
     const memoryStorage = multer.memoryStorage();
@@ -130,15 +130,33 @@ app.delete('/api/notes/:id', (req, res) => {
     res.json({ success: true });
 });
 
-// ====== AI ROUTES (Uses OpenAI) ======
-const { OpenAI } = require('openai');
+// ====== AI ROUTES (Uses Google Gemini API) ======
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-function getOpenAI() {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey || apiKey === 'sk-your-key-here' || apiKey === 'sk-your-actual-key-here') {
-        throw new Error('OpenAI API key not configured. Set OPENAI_API_KEY in backend/.env file.');
+function getGemini() {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error('Gemini API key not configured. Set GEMINI_API_KEY in backend/.env file.');
     }
-    return new OpenAI({ apiKey });
+    return new GoogleGenerativeAI(apiKey);
+}
+
+const GEMINI_MODEL = 'gemini-1.5-flash';
+
+async function generateGeminiContent(prompt, systemInstruction, options = {}) {
+    const genAI = getGemini();
+    const model = genAI.getGenerativeModel({ 
+        model: GEMINI_MODEL,
+        systemInstruction: systemInstruction
+    });
+    const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+            maxOutputTokens: options.maxTokens || 1000,
+            temperature: options.temperature ?? 0.5,
+        },
+    });
+    return result.response.text();
 }
 
 // Summarize notes
@@ -150,27 +168,16 @@ app.post('/api/ai/summarize', async (req, res) => {
         const langMap = { en: 'English', id: 'Indonesian', zh: 'Chinese' };
         const targetLang = langMap[language] || 'English';
 
-        const openai = getOpenAI();
-        const completion = await openai.chat.completions.create({
-            model: 'gpt-3.5-turbo',
-            messages: [
-                {
-                    role: 'system',
-                    content: `You are an expert note summarizer. Summarize the following notes in ${targetLang}. 
-                    Provide:
-                    1. A brief overview (2-3 sentences)
-                    2. Key points (bullet points, organized)
-                    3. Simplified explanation
-                    
-                    Make it easy to understand. Use clear language and organize it well.`
-                },
-                { role: 'user', content: content }
-            ],
-            max_tokens: 1000,
-            temperature: 0.5
-        });
+        const systemInstruction = `You are an expert note summarizer. Summarize the following notes in ${targetLang}. 
+            Provide:
+            1. A brief overview (2-3 sentences)
+            2. Key points (bullet points, organized)
+            3. Simplified explanation
+            
+            Make it easy to understand. Use clear language and organize it well.`;
 
-        res.json({ summary: completion.choices[0].message.content });
+        const summary = await generateGeminiContent(content, systemInstruction, { maxTokens: 1000, temperature: 0.5 });
+        res.json({ summary });
     } catch (error) {
         console.error('Summarize error:', error.message);
         res.status(500).json({ error: 'AI service error: ' + error.message });
@@ -186,8 +193,7 @@ app.post('/api/ai/chat', async (req, res) => {
         const langMap = { en: 'English', id: 'Indonesian', zh: 'Chinese' };
         const targetLang = langMap[language] || 'English';
 
-        const openai = getOpenAI();
-        const systemPrompt = noteContext 
+        const systemInstruction = noteContext 
             ? `You are an AI study assistant. Answer questions about the following notes in ${targetLang}. 
                Use the notes as context to provide accurate answers. If the question is not related to the notes, 
                you can still answer generally but mention that it's not from the notes.
@@ -196,17 +202,8 @@ app.post('/api/ai/chat', async (req, res) => {
                ${noteContext.substring(0, 4000)}`
             : `You are an AI study assistant. Answer questions in ${targetLang} to help with studying and understanding concepts.`;
 
-        const completion = await openai.chat.completions.create({
-            model: 'gpt-3.5-turbo',
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: message }
-            ],
-            max_tokens: 800,
-            temperature: 0.7
-        });
-
-        res.json({ reply: completion.choices[0].message.content });
+        const reply = await generateGeminiContent(message, systemInstruction, { maxTokens: 800, temperature: 0.7 });
+        res.json({ reply });
     } catch (error) {
         console.error('Chat error:', error.message);
         res.status(500).json({ error: 'AI service error: ' + error.message });
@@ -222,22 +219,11 @@ app.post('/api/ai/translate', async (req, res) => {
         const langMap = { en: 'English', id: 'Indonesian', zh: 'Chinese' };
         const targetLang = langMap[targetLanguage] || 'English';
 
-        const openai = getOpenAI();
-        const completion = await openai.chat.completions.create({
-            model: 'gpt-3.5-turbo',
-            messages: [
-                {
-                    role: 'system',
-                    content: `You are a translator. Translate the following text to ${targetLang}. 
-                    Maintain the original formatting, structure, and tone. Only respond with the translated text.`
-                },
-                { role: 'user', content: content }
-            ],
-            max_tokens: 2000,
-            temperature: 0.3
-        });
+        const systemInstruction = `You are a translator. Translate the following text to ${targetLang}. 
+            Maintain the original formatting, structure, and tone. Only respond with the translated text.`;
 
-        res.json({ translated: completion.choices[0].message.content });
+        const translated = await generateGeminiContent(content, systemInstruction, { maxTokens: 2000, temperature: 0.3 });
+        res.json({ translated });
     } catch (error) {
         console.error('Translate error:', error.message);
         res.status(500).json({ error: 'AI service error: ' + error.message });
@@ -250,25 +236,25 @@ app.post('/api/ai/extract-url', async (req, res) => {
         const { url } = req.body;
         if (!url) return res.status(400).json({ error: 'URL is required' });
 
-        const openai = getOpenAI();
-        const completion = await openai.chat.completions.create({
-            model: 'gpt-3.5-turbo',
-            messages: [
-                {
-                    role: 'system',
-                    content: `You are a web content extractor. Given a URL, identify what kind of content it likely contains 
-                    based on the URL pattern (YouTube video, Google Doc, Canva presentation, article, etc.) 
-                    and provide a simulated extraction of what the content might be about. 
-                    Format the response as a JSON with: title, sourceType, extractedContent.`
-                },
-                { role: 'user', content: `Extract and summarize content from this URL: ${url}` }
-            ],
-            max_tokens: 1000,
-            temperature: 0.5,
-            response_format: { type: 'json_object' }
-        });
+        const systemInstruction = `You are a web content extractor. Given a URL, identify what kind of content it likely contains 
+            based on the URL pattern (YouTube video, Google Doc, Canva presentation, article, etc.) 
+            and provide a simulated extraction of what the content might be about. 
+            Format the response as a JSON with: title, sourceType, extractedContent.`;
 
-        const result = JSON.parse(completion.choices[0].message.content);
+        const resultText = await generateGeminiContent(
+            `Extract and summarize content from this URL: ${url}`, 
+            systemInstruction, 
+            { maxTokens: 1000, temperature: 0.5 }
+        );
+        
+        // Try to parse the response as JSON
+        let result;
+        try {
+            result = JSON.parse(resultText);
+        } catch {
+            // If not valid JSON, wrap the text
+            result = { title: 'URL Extraction', sourceType: 'url', extractedContent: resultText };
+        }
         res.json(result);
     } catch (error) {
         console.error('Extract URL error:', error.message);
